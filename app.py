@@ -655,10 +655,8 @@ def api_news():
         "sources": SOURCE_STATUS,
         "articles": articles,
     })
-
-if __name__ == "__main__":
-    refresh_news()
-
+def start_scheduler():
+    refresh_news()  # run once at startup
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(
         refresh_news,
@@ -670,4 +668,9 @@ if __name__ == "__main__":
     )
     scheduler.start()
 
+# Start scheduler when app is imported (Gunicorn case)
+start_scheduler()
+
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+
