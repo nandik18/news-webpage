@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCX Live Commodity News</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">MCX</div>
+        <div>
+          <h1>Commodity News Desk</h1>
+          <p>Live Indian & global commodity headlines</p>
+        </div>
+      </div>
+      <div class="live-box">
+        <div class="live-line"><span class="dot"></span><strong>LIVE</strong></div>
+        <div id="updated">Connecting…</div>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <div class="eyebrow">MARKET INTELLIGENCE</div>
+        <h2>News that matters to commodities.</h2>
+        <p>Fresh headlines from free RSS sources, automatically refreshed every minute.</p>
+      </div>
+      <div class="stats">
+        <div><strong id="articleCount">—</strong><span>articles</span></div>
+        <div><strong id="sourceCount">—</strong><span>sources online</span></div>
+        <div><strong id="latestAge">—</strong><span>latest age</span></div>
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="search-wrap">
+        <span>⌕</span>
+        <input id="search" placeholder="Search gold, crude, MCX, copper…">
+      </div>
+      <select id="commodity"><option value="ALL">All commodities</option></select>
+      <select id="impact">
+        <option value="ALL">All impact</option>
+        <option value="POSITIVE">Positive</option>
+        <option value="NEGATIVE">Negative</option>
+        <option value="NEUTRAL">Neutral</option>
+      </select>
+      <button id="refreshBtn">↻ Refresh now</button>
+    </section>
+
+    <div class="notice">
+      <span>i</span>
+      <div><strong>Headline impact</strong> is a directional interpretation of the headline, not a trading signal or financial advice.</div>
+    </div>
+
+    <main>
+      <div class="section-head">
+        <div><h3>Latest headlines</h3><span id="resultCount"></span></div>
+        <div class="fresh">Auto-refresh: <b>{{ refresh_seconds }} sec</b></div>
+      </div>
+      <div id="news"></div>
+    </main>
+
+    <details class="sources-panel">
+      <summary>Source health</summary>
+      <div id="sources"></div>
+    </details>
+
+    <footer>Uses public RSS/news metadata and links to original publishers. No article body is copied.</footer>
+  </div>
+  <script>const refreshSeconds = {{ refresh_seconds }};</script>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
