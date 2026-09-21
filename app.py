@@ -9,6 +9,10 @@ import re
 import requests
 import time
 from bs4 import BeautifulSoup
+import pytz
+
+IST = pytz.timezone("Asia/Kolkata")
+
 
 from config import (
     ALL_FEEDS, REFRESH_SECONDS, MAX_ARTICLES_PER_SOURCE,
@@ -463,13 +467,13 @@ def add_item(title, source, url, published_dt, summary="", updated_dt=None):
         "source": source,
         "url": url,
         "published_at": published_dt.isoformat() if published_dt else None,
-        "published_label": published_dt.astimezone().strftime("%d %b %Y, %I:%M %p") if published_dt else "Time unavailable",
+        "published_label": published_dt.astimezone(IST).strftime("%d %b %Y, %I:%M %p") if published_dt else "Time unavailable",
         "updated_at": updated_dt.isoformat() if updated_dt else None,
-        "updated_label": updated_dt.astimezone().strftime("%d %b %Y, %I:%M %p") if updated_dt else None,
+        "updated_label": updated_dt.astimezone(IST).strftime("%d %b %Y, %I:%M %p") if updated_dt else None,
         "display_time_at": display_dt.isoformat() if display_dt else None,
         "time_label": (
-            ("Updated " + updated_dt.astimezone().strftime("%d %b %Y, %I:%M %p")) if updated_dt else
-            ("Published " + published_dt.astimezone().strftime("%d %b %Y, %I:%M %p")) if published_dt else
+            ("Updated " + updated_dt.astimezone(IST).strftime("%d %b %Y, %I:%M %p")) if updated_dt else
+            ("Published " + published_dt.astimezone(IST).strftime("%d %b %Y, %I:%M %p")) if published_dt else
             "Time unavailable"
         ),
         "commodity": commodity,
@@ -647,7 +651,7 @@ def api_news():
 
     return jsonify({
         "updated_at": LAST_UPDATED.isoformat() if LAST_UPDATED else None,
-        "server_time": now.isoformat(),
+        "server_time": now.astimezone(IST).isoformat(),
         "count": len(articles),
         "latest_age_minutes": latest_age_minutes,
         "sources_ok": sum(1 for x in SOURCE_STATUS.values() if x["ok"]),
