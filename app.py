@@ -1,5 +1,4 @@
 from flask import Flask, jsonify, render_template
-from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 import feedparser
@@ -24,6 +23,11 @@ NEWS = {}
 SOURCE_STATUS = {}
 LAST_UPDATED = None
 REFRESH_IN_PROGRESS = False
+
+# Server-side refresh cache.
+# The browser already requests /api/news every REFRESH_SECONDS.
+# We therefore do not need a background scheduler.
+SERVER_CACHE_TTL = max(30, min(int(REFRESH_SECONDS), 60))
 
 COMMODITIES = {
     "GOLD": ["gold", "bullion", "xau"],
@@ -555,11 +559,8 @@ def add_item(title, source, url, published_dt, summary="", updated_dt=None):
     if not title or not url:
         return
 
-    source_published_dt, source_updated_dt = extract_page_times(url)
-    if source_published_dt:
-        published_dt = source_published_dt
-    if source_updated_dt:
-        updated_dt = source_updated_dt
+    # Do not make additional article-page requests during RSS refresh.
+    # RSS publication/update timestamps are used directly.
 
     # Age filtering uses the source publication time when available, not an RSS refresh time.
     now = datetime.now(timezone.utc)
@@ -600,29 +601,56 @@ def add_item(title, source, url, published_dt, summary="", updated_dt=None):
 
 def fetch_feed(source, feed_url):
     started = time.time()
+
     try:
+        # Cache-bust the RSS request.
+        separator = "&" if "?" in feed_url else "?"
+        request_url = f"{feed_url}{separator}_ts={int(time.time())}"
+
         response = requests.get(
-            feed_url,
+            request_url,
             timeout=15,
-            headers={"User-Agent": "MCX-Live-Commodity-News/2.0 (+RSS reader)"}
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/128.0 Safari/537.36"
+                ),
+                "Accept": (
+                    "application/rss+xml, application/xml, "
+                    "text/xml, text/html;q=0.9, */*;q=0.8"
+                ),
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
         )
+
         response.raise_for_status()
 
         feed = feedparser.parse(response.content)
+
         if getattr(feed, "bozo", 0) and not feed.entries:
             raise RuntimeError("Feed could not be parsed")
 
         count = 0
+
         for entry in feed.entries[:MAX_ARTICLES_PER_SOURCE]:
             dt = parse_datetime(entry)
+
+            updated_dt = parse_datetime({
+                "updated_parsed": entry.get("updated_parsed"),
+                "updated": entry.get("updated"),
+            })
+
             add_item(
                 entry.get("title", ""),
                 source,
                 entry.get("link", ""),
                 dt,
                 entry.get("summary", ""),
-                parse_datetime({"updated_parsed": entry.get("updated_parsed"), "updated": entry.get("updated")})
+                updated_dt,
             )
+
             count += 1
 
         SOURCE_STATUS[source] = {
@@ -631,14 +659,17 @@ def fetch_feed(source, feed_url):
             "message": "OK",
             "seconds": round(time.time() - started, 2),
         }
+
     except requests.HTTPError as exc:
         code = getattr(exc.response, "status_code", None)
+
         SOURCE_STATUS[source] = {
             "ok": False,
             "articles": 0,
             "message": f"HTTP {code}" if code else "HTTP error",
             "seconds": round(time.time() - started, 2),
         }
+
     except Exception as exc:
         SOURCE_STATUS[source] = {
             "ok": False,
@@ -711,22 +742,26 @@ def fetch_investing_latest():
         }
 
 def refresh_news():
-    global LAST_UPDATED, REFRESH_IN_PROGRESS, PAGE_TIME_LOOKUPS_THIS_REFRESH
+    global LAST_UPDATED, REFRESH_IN_PROGRESS
+    global PAGE_TIME_LOOKUPS_THIS_REFRESH
+
+    # If another request is already refreshing, don't start another one.
     if REFRESH_IN_PROGRESS:
-        return
+        return False
 
     REFRESH_IN_PROGRESS = True
     PAGE_TIME_LOOKUPS_THIS_REFRESH = 0
+
     try:
+        successful_sources = 0
+
         for source, url in ALL_FEEDS:
             fetch_feed(source, url)
 
-        # Investing.com RSS remains enabled through ALL_FEEDS.
-        # The live HTML page is not polled because Investing.com can return
-        # HTTP 403 to automated requests.
+            status = SOURCE_STATUS.get(source, {})
+            if status.get("ok"):
+                successful_sources += 1
 
-        # GDELT is intentionally disabled by default because public endpoints
-        # can rate-limit frequent polling. It can be enabled in .env if desired.
         if GDELT_ENABLED:
             SOURCE_STATUS["GDELT"] = {
                 "ok": False,
@@ -735,7 +770,11 @@ def refresh_news():
                 "seconds": 0,
             }
 
+        # Mark the refresh time even if some feeds fail.
         LAST_UPDATED = datetime.now(timezone.utc)
+
+        return successful_sources > 0
+
     finally:
         REFRESH_IN_PROGRESS = False
 
@@ -754,46 +793,55 @@ def index():
 def api_news():
     now = datetime.now(timezone.utc)
 
-    # Force refresh if scheduler missed or data is stale
-    if not LAST_UPDATED or (now - LAST_UPDATED).total_seconds() > REFRESH_SECONDS:
+    needs_refresh = (
+        LAST_UPDATED is None
+        or (now - LAST_UPDATED).total_seconds() >= SERVER_CACHE_TTL
+    )
+
+    if needs_refresh and not REFRESH_IN_PROGRESS:
         refresh_news()
 
     articles = sorted_articles()
 
     latest = articles[0].get("display_time_at") if articles else None
+
     latest_age_minutes = None
+
     if latest:
         try:
             latest_dt = datetime.fromisoformat(latest)
-            latest_age_minutes = max(0, int((now - latest_dt).total_seconds() / 60))
+
+            latest_age_minutes = max(
+                0,
+                int((now - latest_dt).total_seconds() / 60)
+            )
+
         except Exception:
             pass
 
     return jsonify({
-        "updated_at": LAST_UPDATED.astimezone(IST).isoformat() if LAST_UPDATED else None,
+        "updated_at": (
+            LAST_UPDATED.astimezone(IST).isoformat()
+            if LAST_UPDATED else None
+        ),
+
         "server_time": now.astimezone(IST).isoformat(),
+
         "count": len(articles),
+
         "latest_age_minutes": latest_age_minutes,
-        "sources_ok": sum(1 for x in SOURCE_STATUS.values() if x["ok"]),
+
+        "sources_ok": sum(
+            1 for x in SOURCE_STATUS.values()
+            if x.get("ok")
+        ),
+
         "sources_total": len(SOURCE_STATUS),
+
         "sources": SOURCE_STATUS,
+
         "articles": articles,
     })
-def start_scheduler():
-    refresh_news()  # run once at startup
-    scheduler = BackgroundScheduler(daemon=True)
-    scheduler.add_job(
-        refresh_news,
-        "interval",
-        seconds=REFRESH_SECONDS,
-        id="news_refresh",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.start()
-
-# Start scheduler when app is imported (Gunicorn case)
-start_scheduler()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
