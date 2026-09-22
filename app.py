@@ -753,6 +753,11 @@ def index():
 @app.route("/api/news")
 def api_news():
     now = datetime.now(timezone.utc)
+
+    # Force refresh if scheduler missed or data is stale
+    if not LAST_UPDATED or (now - LAST_UPDATED).total_seconds() > REFRESH_SECONDS:
+        refresh_news()
+
     articles = sorted_articles()
 
     latest = articles[0].get("display_time_at") if articles else None
@@ -765,7 +770,7 @@ def api_news():
             pass
 
     return jsonify({
-        "updated_at": LAST_UPDATED.isoformat() if LAST_UPDATED else None,
+        "updated_at": LAST_UPDATED.astimezone(IST).isoformat() if LAST_UPDATED else None,
         "server_time": now.astimezone(IST).isoformat(),
         "count": len(articles),
         "latest_age_minutes": latest_age_minutes,
