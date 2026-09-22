@@ -29,7 +29,7 @@ COMMODITIES = {
     "GOLD": ["gold", "bullion", "xau"],
     "SILVER": ["silver", "xag"],
     "PALM OIL": ["palm oil"],
-    "CRUDE OIL": ["crude oil", "crude", "brent", "wti", "oil prices", "oil price", "oil"],
+    "CRUDE OIL": ["crude oil", "crude", "brent", "wti", "oil prices", "oil price", "opec"],
     "NATURAL GAS": ["natural gas", "natgas", "lng"],
     "COPPER": ["copper"],
     "ALUMINIUM": ["aluminium", "aluminum"],
@@ -43,6 +43,19 @@ COMMODITIES = {
     "WHEAT": ["wheat"],
     "SOYBEAN": ["soybean", "soybeans"],
     "MENTHA OIL": ["mentha"],
+}
+CRYPTO_ASSETS = {
+    "BITCOIN": ["bitcoin", "btc"],
+    "ETHEREUM": ["ethereum", "eth"],
+    "CRYPTO": [
+        "cryptocurrency",
+        "crypto market",
+        "crypto markets",
+        "digital asset",
+        "digital assets",
+        "altcoin",
+        "altcoins",
+    ],
 }
 
 # Directional headline language only. This is not a trading signal.
@@ -88,11 +101,40 @@ def parse_datetime(entry):
     return None
 
 def detect_commodity(title, summary=""):
-    text = f"{title} {summary}".lower()
+    """
+    Detect the actual asset discussed by the article.
+
+    The title gets priority over the summary. Generic feed/source names
+    are deliberately not used to guess an asset, and unknown articles are
+    marked UNCLASSIFIED rather than being assigned to Crude Oil.
+    """
+    title_text = str(title or "").lower()
+    summary_text = str(summary or "").lower()
+
+    # Crypto first so a Bitcoin article mentioning oil does not become Crude Oil.
+    for asset, words in CRYPTO_ASSETS.items():
+        for word in words:
+            if re.search(r"\b" + re.escape(word) + r"\b", title_text):
+                return asset
+
+    # Then detect commodities from the headline.
     for name, words in COMMODITIES.items():
-        if any(re.search(r"\b" + re.escape(word) + r"\b", text) for word in words):
-            return name
-    return "GLOBAL COMMODITIES"
+        for word in words:
+            if re.search(r"\b" + re.escape(word) + r"\b", title_text):
+                return name
+
+    # If the headline is not enough, use the article summary.
+    for asset, words in CRYPTO_ASSETS.items():
+        for word in words:
+            if re.search(r"\b" + re.escape(word) + r"\b", summary_text):
+                return asset
+
+    for name, words in COMMODITIES.items():
+        for word in words:
+            if re.search(r"\b" + re.escape(word) + r"\b", summary_text):
+                return name
+
+    return "UNCLASSIFIED"
 
 def classify_market_impact(title, summary, commodity):
     """
@@ -126,7 +168,7 @@ def classify_market_impact(title, summary, commodity):
     commodity_terms = {
         "GOLD": ["gold", "bullion"],
         "SILVER": ["silver"],
-        "CRUDE OIL": ["oil", "crude", "brent", "wti"],
+        "CRUDE OIL": ["crude oil", "crude", "brent", "wti", "opec"],
         "NATURAL GAS": ["natural gas", "lng"],
         "COPPER": ["copper"],
         "ALUMINIUM": ["aluminium", "aluminum"],
@@ -144,7 +186,10 @@ def classify_market_impact(title, summary, commodity):
     }
 
     relevant = commodity_terms.get(commodity, [])
-    commodity_mentioned = any(x in text for x in relevant) or commodity == "GLOBAL COMMODITIES"
+    commodity_mentioned = any(
+        re.search(r"\b" + re.escape(x) + r"\b", text)
+        for x in relevant
+    )
 
     if commodity_mentioned and has_price_down:
         add(commodity, "NEGATIVE",
@@ -275,88 +320,154 @@ def classify_market_impact(title, summary, commodity):
     elif dedup:
         confidence = 72
 
-    # Professional, evidence-led market takeaway. This is descriptive, not a buy/sell instruction.
-    support = any(x in text for x in [
-        "defends 50-day", "defends the 50-day", "holds 50-day", "holds the 50-day",
-        "above 50-day", "above the 50-day", "50-day support", "finds support",
-        "holds support", "at support", "technical support"
-    ])
-    resistance = any(x in text for x in [
-        "hits resistance", "at resistance", "technical resistance", "faces resistance",
-        "resistance near", "50-day resistance"
-    ])
+        # ============================================================
+    # NEWS-SPECIFIC TAKEAWAY / CONCLUSION
+    # ============================================================
+    #
+    # IMPORTANT:
+    # These fields must come from the actual article content.
+    # Do NOT generate generic market commentary when the source
+    # does not provide enough information.
+    #
 
-    # Event-specific takeaways: use the article evidence rather than a generic sentiment sentence.
-    diplomacy = any(x in text for x in [
-        "diplomacy", "diplomatic progress", "diplomatic", "de-escalat",
-        "peace talks", "ceasefire", "negotiations", "talks"
-    ])
-    export_recovery = any(x in text for x in [
-        "export recovery", "exports recover", "exports recovered",
-        "recovering exports", "shipments recover", "partial recovery in shipments",
-        "saudi exports", "saudi shipments"
-    ])
-    if commodity == "CRUDE OIL" and has_price_down and (diplomacy or export_recovery):
-        reasons = []
-        if diplomacy:
-            reasons.append("hopes for diplomatic progress can reduce the geopolitical risk premium embedded in oil prices")
-        if export_recovery:
-            reasons.append("improving Saudi shipments point to better near-term availability")
-        joined = " and ".join(reasons)
-        conclusion = (
-            f"Crude oil is under downward price pressure in the reported session as {joined}. "
-            "That is negative for crude prices and upstream producers, while lower fuel costs can be supportive for airlines, transport and other energy-intensive users. "
-            "The key risk to this view is a renewed physical supply disruption or deterioration in regional diplomacy."
+    def extract_sentences(value):
+        value = clean(value)
+
+        if not value:
+            return []
+
+        # Remove common RSS boilerplate.
+        value = re.sub(
+            r'^(read more|click here|continue reading)\s*[:\-]?\s*',
+            '',
+            value,
+            flags=re.I
         )
-    elif commodity == "NATURAL GAS" and has_price_down and support:
-        conclusion = (
-            "Natural gas has a softer near-term price tone as winter contracts move lower, "
-            "while the 50-day level provides a technical reference for whether the decline extends or stabilises. "
-            "The price direction is negative, but the cited support level is an important area to monitor."
-        )
-    elif commodity == "NATURAL GAS" and has_price_up and resistance:
-        conclusion = (
-            "Natural gas is showing a firmer price tone, although the move is meeting technical "
-            "resistance. The key market question is whether prices can sustain the advance or "
-            "stall near that resistance level."
-        )
-    elif support and has_price_down:
-        conclusion = (
-            f"{commodity.title()} prices are moving lower, but the article also points to technical "
-            "support. That leaves the immediate price tone weaker while the cited support level "
-            "could influence whether the decline extends."
-        )
-    elif resistance and has_price_up:
-        conclusion = (
-            f"{commodity.title()} prices are moving higher, but the article also identifies technical "
-            "resistance. The near-term signal is firmer, with follow-through depending on whether "
-            "that resistance is cleared."
-        )
-    elif overall == "NEGATIVE":
-        reason = direct[0]["reason"] if direct else "The reported development adds pressure to the price, demand or supply outlook."
-        conclusion = (
-            f"Market takeaway: {commodity.title()} faces a weaker near-term setup. {reason} "
-            "The effect on related assets may differ depending on their exposure to the move."
-        )
-    elif overall == "POSITIVE":
-        reason = direct[0]["reason"] if direct else "The reported development supports the price, demand or supply outlook."
-        conclusion = (
-            f"Market takeaway: {commodity.title()} has a firmer near-term setup. {reason} "
-            "Related assets may respond differently depending on their exposure to the commodity."
-        )
-    elif dedup:
-        primary = dedup[0]["reason"]
-        conclusion = (
-            f"Market takeaway: the article has mixed or indirect implications for {commodity.title()}. "
-            f"{primary} The available evidence does not establish a sufficiently clear one-direction price signal for the commodity itself."
-        )
+
+        # Split into reasonably complete sentences.
+        sentences = re.split(r'(?<=[.!?])\s+', value)
+
+        result = []
+
+        for sentence in sentences:
+            sentence = sentence.strip()
+
+            if len(sentence) < 35:
+                continue
+
+            # Avoid obvious RSS/navigation garbage.
+            bad_phrases = [
+                "subscribe",
+                "sign up",
+                "read more",
+                "click here",
+                "follow us",
+                "advertisement",
+                "all rights reserved",
+            ]
+
+            if any(x in sentence.lower() for x in bad_phrases):
+                continue
+
+            result.append(sentence)
+
+        return result
+
+    title_sentences = extract_sentences(title)
+    summary_sentences = extract_sentences(summary)
+
+    # ------------------------------------------------------------
+    # News Takeaway
+    # ------------------------------------------------------------
+    #
+    # Prefer the publisher's actual RSS description.
+    # We do NOT create a sentence such as:
+    # "The commodity is under downward pressure..."
+    #
+    # If there is no source summary, don't show a fake takeaway.
+    #
+
+    article_takeaway = None
+
+    if summary_sentences:
+        article_takeaway = " ".join(summary_sentences[:2])[:900]
+
+    # ------------------------------------------------------------
+    # Market Conclusion
+    # ------------------------------------------------------------
+    #
+    # Select sentences from the actual news that contain evidence
+    # relevant to the detected market impact.
+    #
+    # This means the conclusion is based on the article itself,
+    # rather than a hardcoded paragraph.
+    #
+
+    evidence_words = [
+        # price
+        "price", "prices", "rose", "rises", "rising",
+        "fell", "falls", "falling", "slid", "slides",
+        "sliding", "dipped", "dips", "dropped", "drops",
+        "declined", "declines", "higher", "lower",
+
+        # supply
+        "supply", "supplies", "production", "output",
+        "exports", "export", "imports", "import",
+        "shipment", "shipments", "flows", "outage",
+        "disruption", "disruptions", "shortage",
+        "surplus", "inventory", "inventories",
+        "stockpiles",
+
+        # demand
+        "demand", "consumption", "buyers", "buying",
+        "sales", "economic growth", "slowdown",
+        "recession",
+
+        # macro
+        "inflation", "interest rates", "rate cut",
+        "rate hike", "central bank", "dollar",
+        "currency",
+
+        # geopolitics / policy
+        "tariff", "tariffs", "sanctions", "war",
+        "conflict", "diplomacy", "negotiations",
+        "iran", "russia", "ukraine", "opec",
+        "saudi", "china", "united states", "us"
+    ]
+
+    # Use summary first because it normally contains more context
+    # than the headline.
+    candidate_sentences = summary_sentences[:]
+
+    # If summary is unavailable, use the headline.
+    if not candidate_sentences:
+        candidate_sentences = title_sentences
+
+    relevant_sentences = []
+
+    for sentence in candidate_sentences:
+        sentence_lower = sentence.lower()
+
+        if any(word in sentence_lower for word in evidence_words):
+            relevant_sentences.append(sentence)
+
+    # Remove duplicate sentences while preserving order.
+    unique_sentences = []
+    seen_sentences = set()
+
+    for sentence in relevant_sentences:
+        key = re.sub(r"\s+", " ", sentence.lower()).strip()
+
+        if key not in seen_sentences:
+            seen_sentences.add(key)
+            unique_sentences.append(sentence)
+
+    if unique_sentences:
+        conclusion = " ".join(unique_sentences[:3])[:1400]
     else:
-        conclusion = (
-            f"Market takeaway: the available headline and summary do not establish a sufficiently clear one-direction price signal for {commodity.title()}. "
-            "The market response will depend on the underlying supply, demand, positioning and macro details."
-        )
+        conclusion = None
 
-    return overall, confidence, conclusion, dedup
+    return overall, confidence, article_takeaway, conclusion, dedup
 
 def classify(title, commodity, summary=""):
     return classify_market_impact(title, summary, commodity)
@@ -457,7 +568,9 @@ def add_item(title, source, url, published_dt, summary="", updated_dt=None):
         return
 
     commodity = detect_commodity(title, summary)
-    impact, confidence, conclusion, market_effects = classify(title, commodity, summary)
+    impact, confidence, article_takeaway, conclusion, market_effects = classify(
+        title, commodity, summary
+    )
     key = hashlib.sha256((url or title).encode("utf-8")).hexdigest()
 
     display_dt = updated_dt or published_dt
@@ -477,8 +590,10 @@ def add_item(title, source, url, published_dt, summary="", updated_dt=None):
             "Time unavailable"
         ),
         "commodity": commodity,
+        "asset": commodity,
         "impact": impact,
         "confidence": confidence,
+        "takeaway": article_takeaway,
         "conclusion": conclusion,
         "market_effects": market_effects,
     }
@@ -606,9 +721,9 @@ def refresh_news():
         for source, url in ALL_FEEDS:
             fetch_feed(source, url)
 
-        # Directly poll the live Investing.com commodities page as a second
-        # path. This reduces dependence on RSS propagation/caching delays.
-        fetch_investing_latest()
+        # Investing.com RSS remains enabled through ALL_FEEDS.
+        # The live HTML page is not polled because Investing.com can return
+        # HTTP 403 to automated requests.
 
         # GDELT is intentionally disabled by default because public endpoints
         # can rate-limit frequent polling. It can be enabled in .env if desired.
